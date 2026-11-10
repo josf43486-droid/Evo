@@ -1,0 +1,14 @@
+node_modules/
+build/
+dist/
+coverage/
+data/
+.env
+.env.*
+!.env.example
+*.log
+*.log.*
+*.tmp
+*.old
+backups/
+.DS_Store

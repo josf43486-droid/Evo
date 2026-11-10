@@ -1,0 +1,24 @@
+EVO — Phase 3 Security Update
+
+Implemented in this source archive:
+- HTTP security headers and production HSTS.
+- Same-origin checks for state-changing requests.
+- Process-local API/authentication rate limits.
+- Suspicious API path rejection and throttled security audit events.
+- Masked IP logging and bounded local audit log rotation.
+- Telegram alerts for repeated authentication failures, suspicious paths, and server-side handler errors (requires Telegram configuration).
+- Owner-only security events API and Arabic Security Center view in the admin dashboard.
+- Telegram webhook secret comparison hardened with constant-time comparison.
+- Security unit tests and deployment hardening checklist.
+
+Verification:
+- Security helper tests: 4 passed using Node.js 22 native TypeScript stripping.
+- Full dependency installation/build: NOT VERIFIED. npm ci did not complete within the available execution window; no claim of a successful production build is made.
+- Production tenant isolation: NOT VERIFIED. Rootless per-project containers/cgroups, reverse-proxy/WAF, TLS, shared rate limiting, and host hardening must be configured on the deployment host.
+
+Run tests after installing dependencies:
+  npm run test:security
+
+Then install/build:
+  npm ci
+  npm run build

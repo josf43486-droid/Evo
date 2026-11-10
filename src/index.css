@@ -1,0 +1,64 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* ألوان العلامة (أحمر) — غيّرها من هنا لتتغير في كل الموقع */
+  --color-brand-50:  #effaff;
+  --color-brand-100: #d8f4ff;
+  --color-brand-200: #b5eaff;
+  --color-brand-300: #85d9ff;
+  --color-brand-400: #4fc3f7;
+  --color-brand-500: #16aee8;
+  --color-brand-600: #0789c4;
+  --color-brand-700: #0872a1;
+  --color-brand-800: #095b7e;
+  --color-brand-900: #0b4560;
+  --color-brand-950: #082b3a;
+}
+
+@layer base {
+  body {
+    @apply bg-[#0a0708] text-white antialiased selection:bg-brand-500/30;
+  }
+}
+
+@layer utilities {
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-white/10 rounded-full hover:bg-white/20 transition-colors;
+  }
+}
+
+
+@layer components {
+  .field-admin {
+    @apply w-full min-w-0 px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white outline-none transition-colors focus:border-brand-500;
+  }
+  .field-admin::placeholder { @apply text-gray-600; }
+}
+
+@keyframes nexusToastIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+
+
+/* NEXUS premium boot and interaction layer */
+.nexus-boot { animation: nexusBoot .7s ease both; }
+.nexus-orbit { width:76px;height:76px;border:1px solid color-mix(in srgb,var(--color-brand-500) 55%,transparent);border-radius:24px;display:grid;place-items:center;position:relative;box-shadow:0 0 45px color-mix(in srgb,var(--color-brand-500) 18%,transparent),inset 0 0 24px #ffffff08;transform:rotate(-8deg); }
+.nexus-orbit:before,.nexus-orbit:after { content:"";position:absolute;inset:-8px;border:1px solid #ffffff12;border-radius:28px;animation:nexusOrbit 8s linear infinite; }
+.nexus-orbit:after { inset:-15px;border-color:color-mix(in srgb,var(--color-brand-500) 22%,transparent);animation-direction:reverse;animation-duration:12s; }
+.nexus-orbit span { font-size:34px;font-weight:950;color:white;text-shadow:0 0 22px var(--color-brand-500);transform:rotate(8deg); }
+.nexus-loading { width:min(260px,72vw);height:3px;border-radius:9px;background:#ffffff12;overflow:hidden; }
+.nexus-loading i { display:block;width:38%;height:100%;border-radius:9px;background:var(--color-brand-500);box-shadow:0 0 18px var(--color-brand-500);animation:nexusLoad 1.25s ease-in-out infinite; }
+@keyframes nexusLoad { 0%{transform:translateX(260%)} 100%{transform:translateX(-280%)} }
+@keyframes nexusOrbit { to{transform:rotate(360deg)} }
+@keyframes nexusBoot { from{opacity:0;transform:translateY(9px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)} }
