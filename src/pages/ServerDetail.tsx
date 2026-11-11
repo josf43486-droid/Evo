@@ -859,6 +859,7 @@ function Console({ server }: { server: ServerInstance }) {
   };
 
   const syncWorkspaceFiles = async () => {
+    const textFile = /\\.(py|pyw|js|mjs|cjs|ts|tsx|jsx|json|jsonc|html|htm|css|scss|less|php|phtml|txt|md|markdown|yml|yaml|toml|ini|cfg|conf|env|sh|bash|sql|xml|csv|gitignore|dockerfile)$/i;
     const ordered = [...files].sort((a, b) => {
       if (a.type === b.type) return getFileFullPath(a).split('/').length - getFileFullPath(b).split('/').length;
       return a.type === 'folder' ? -1 : 1;
@@ -872,6 +873,8 @@ function Console({ server }: { server: ServerInstance }) {
           if (!String(error.message).includes('already exists')) throw error;
         }
       } else {
+        // Never overwrite binary uploads with Firestore's empty text preview.
+        if (!textFile.test(file.name)) continue;
         try {
           await workspaceRequest('/api/ws/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: rel, content: file.content || '' }) });
         } catch (error: any) {
@@ -1210,6 +1213,19 @@ function FileManager({ server }: { server: ServerInstance }) {
       const parent = (renameTarget.path || '/').split('/').filter(Boolean);
       const to = [...parent, newName.trim()].join('/');
       await workspaceRequest('/api/ws/rename', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from, to }) });
+      if (renameTarget.type === 'folder') {
+        const oldPrefix = from;
+        const newPrefix = to;
+        const descendants = await getDocs(query(
+          collection(db, 'servers', server.id, 'files'),
+          where('path', '>=', '/' + oldPrefix),
+          where('path', '<=', '/' + oldPrefix + '\\uf8ff')
+        ));
+        await Promise.all(descendants.docs.map(child => {
+          const childPath = String(child.data().path || '/');
+          return updateDoc(child.ref, { path: '/' + newPrefix + childPath.slice(('/' + oldPrefix).length), updatedAt: serverTimestamp() });
+        }));
+      }
       await updateDoc(doc(db, 'servers', server.id, 'files', renameTarget.id), { name: newName.trim(), updatedAt: serverTimestamp() });
     } catch (error: any) { appAlert(error.message || 'تعذرت إعادة تسمية العنصر.'); return; }
     setIsRenameModal(false);
