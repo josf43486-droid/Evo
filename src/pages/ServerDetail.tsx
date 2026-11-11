@@ -813,7 +813,7 @@ function Console({ server }: { server: ServerInstance }) {
           const data = await logsResponse.json();
           if (data.reset) logOffsetRef.current = 0;
           if (typeof data.text === 'string' && data.text) {
-            setLogs(prev => [...prev, ...data.text.split(/\\r?\\n/).filter(Boolean)]);
+            setLogs(prev => [...prev, ...data.text.split(/\r?\n/).filter(Boolean)]);
           }
           if (typeof data.offset === 'number') logOffsetRef.current = data.offset;
         }
@@ -859,7 +859,7 @@ function Console({ server }: { server: ServerInstance }) {
   };
 
   const syncWorkspaceFiles = async () => {
-    const textFile = /\\.(py|pyw|js|mjs|cjs|ts|tsx|jsx|json|jsonc|html|htm|css|scss|less|php|phtml|txt|md|markdown|yml|yaml|toml|ini|cfg|conf|env|sh|bash|sql|xml|csv|gitignore|dockerfile)$/i;
+    const textFile = /\.(py|pyw|js|mjs|cjs|ts|tsx|jsx|json|jsonc|html|htm|css|scss|less|php|phtml|txt|md|markdown|yml|yaml|toml|ini|cfg|conf|env|sh|bash|sql|xml|csv|gitignore|dockerfile)$/i;
     const ordered = [...files].sort((a, b) => {
       if (a.type === b.type) return getFileFullPath(a).split('/').length - getFileFullPath(b).split('/').length;
       return a.type === 'folder' ? -1 : 1;
@@ -1249,7 +1249,7 @@ function FileManager({ server }: { server: ServerInstance }) {
         const data = await response.json().catch(() => ({}));
         throw new Error(data.message || `Upload failed (${response.status})`);
       }
-      const content = file.type.startsWith('text/') || /\\.(py|js|ts|tsx|jsx|json|html|css|xml|md|txt|yml|yaml|php)$/i.test(file.name) ? await file.text() : '';
+      const content = file.type.startsWith('text/') || /\.(py|js|ts|tsx|jsx|json|html|css|xml|md|txt|yml|yaml|php)$/i.test(file.name) ? await file.text() : '';
       const q = query(collection(db, 'servers', server.id, 'files'), where('path', '==', currentPath), where('name', '==', file.name));
       const existing = await getDocs(q);
       if (existing.empty) {
