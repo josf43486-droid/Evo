@@ -889,7 +889,7 @@ function Console({ server }: { server: ServerInstance }) {
     const defaultMain = server.language === 'python' ? 'main.py' : server.language === 'javascript' ? 'index.js' : 'index.php';
     const commonMains = server.language === 'python' ? ['main.py', 'app.py', 'bot.py', 'index.py']
       : server.language === 'javascript' ? ['index.js', 'app.js', 'server.js', 'main.js'] : ['index.php', 'main.php', 'app.php'];
-    const configured = (server.mainFile || '').replace(/^\\/+/, '');
+    const configured = (server.mainFile || '').replace(/^\/+/, '');
     if (configured) return configured;
     const found = files.find(f => f.type === 'file' && commonMains.includes(f.name));
     return found ? getFileFullPath(found) : defaultMain;
