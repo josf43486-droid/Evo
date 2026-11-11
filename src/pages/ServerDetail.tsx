@@ -1223,7 +1223,7 @@ function FileManager({ server }: { server: ServerInstance }) {
         const descendants = await getDocs(query(
           collection(db, 'servers', server.id, 'files'),
           where('path', '>=', '/' + oldPrefix),
-          where('path', '<=', '/' + oldPrefix + '\\uf8ff')
+          where('path', '<=', '/' + oldPrefix + '\uf8ff')
         ));
         await Promise.all(descendants.docs.map(child => {
           const childPath = String(child.data().path || '/');
