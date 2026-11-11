@@ -895,6 +895,10 @@ function Console({ server }: { server: ServerInstance }) {
     return found ? getFileFullPath(found) : defaultMain;
   };
 
+  useEffect(() => {
+    mainPathRef.current = resolveMainPath();
+  }, [server.mainFile, server.language, files]);
+
   const runCode = async (restart = false) => {
     if (isExecuting) return;
     setIsExecuting(true);
