@@ -1295,7 +1295,11 @@ function FileManager({ server }: { server: ServerInstance }) {
   const handleDeleteSelected = async () => {
     const itemsToDelete = files.filter(f => selectedIds.includes(f.id));
     try {
-      if (itemsToDelete.length) await workspaceRequest('/api/ws/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paths: itemsToDelete.map(workspacePath) }) });
+      const selectedFolders = itemsToDelete.filter(item => item.type === 'folder').map(workspacePath);
+      const pathsToDelete = itemsToDelete.map(workspacePath).filter(path =>
+        !selectedFolders.some(folder => path !== folder && path.startsWith(folder + '/'))
+      );
+      if (pathsToDelete.length) await workspaceRequest('/api/ws/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paths: pathsToDelete }) });
     } catch (error: any) { appAlert(error.message || 'تعذر حذف العناصر.'); return; }
     for (const item of itemsToDelete) {
       await deleteDoc(doc(db, 'servers', server.id, 'files', item.id));
