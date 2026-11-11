@@ -1,8 +1,9 @@
+
 // ============================================================
 //  إعدادات الموقع المركزية — عدّل هنا فقط
 // ============================================================
 
-/** اسم الموقع (الجزء الأول أبيض، الثاني أحمر) */
+/** اسم الموقع */
 export const BRAND_FIRST = 'EVO';
 export const BRAND_SECOND = '';
 export const OWNER_NAME = 'Kairo';
@@ -10,15 +11,12 @@ export const OWNER_USERNAME = '@vx_rw';
 export const OWNER_TELEGRAM_URL = 'https://t.me/Super_Evo_x/425';
 export const BRAND_NAME = BRAND_FIRST;
 
-/** بيانات الدعم — ضع حساباتك أنت */
+/** بيانات الدعم */
 export const SUPPORT_TELEGRAM_URL = OWNER_TELEGRAM_URL;
-export const SUPPORT_EMAIL = 'yousefvipman@gmail.com'; 
+export const SUPPORT_EMAIL = 'yousefvipman@gmail.com';
 
-/**
- * التسجيل بدون إيميل: النظام يخزّن الحساب بصيغة بريد، لذلك نحوّل اسم المستخدم
- * إلى إيميل داخلي (user@far3on.vps). المستخدم لا يراه ولا يحتاج تأكيده.
- */
-export const AUTH_EMAIL_DOMAIN = 'evo.internal';
+/** نطاق تسجيل الدخول الداخلي */
+export const AUTH_EMAIL_DOMAIN = 'nexus.internal';
 
 export const usernameToEmail = (input: string) => {
   const v = input.trim().toLowerCase();
