@@ -707,6 +707,8 @@ function Console({ server }: { server: ServerInstance }) {
   const [isExecuting, setIsExecuting] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const consoleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const logOffsetRef = useRef(0);
+  const mainPathRef = useRef('');
 
   // ---- خلفية الكونسول (صورة يختارها المستخدم) ----
   const { user: authUser } = useAuth();
@@ -784,30 +786,44 @@ function Console({ server }: { server: ServerInstance }) {
     return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m ${sec % 60}s`;
   };
 
-  // Poll for logs
+  // Poll the real workspace process state and append only new log bytes.
   useEffect(() => {
-    let interval: NodeJS.Timeout;
-    if (server.status === 'running') {
-      interval = setInterval(async () => {
-        try {
-          const response = await fetch(`/api/logs/${server.id}`, { headers: authHeaders() });
-          if (response.ok) {
-            const contentType = response.headers.get('content-type');
-            if (contentType && contentType.includes('application/json')) {
-              const data = await response.json();
-              if (data.logs) {
-                setLogs(data.logs);
-              }
+    let cancelled = false;
+    const poll = async () => {
+      const rel = mainPathRef.current;
+      if (!rel) return;
+      try {
+        const [statusResponse, logsResponse] = await Promise.all([
+          fetch('/api/ws/status', { headers: authHeaders() }),
+          fetch(`/api/ws/logs?path=${encodeURIComponent(rel)}&from=${logOffsetRef.current}`, { headers: authHeaders() })
+        ]);
+        if (cancelled) return;
+        if (statusResponse.ok) {
+          const statusData = await statusResponse.json();
+          const proc = (statusData.processes || []).find((p: any) => p.path === rel);
+          if (proc) {
+            const nextStatus = proc.status === 'running' ? 'running'
+              : ['starting', 'installing', 'restarting'].includes(proc.status) ? 'starting' : 'stopped';
+            if (server.status !== nextStatus) {
+              await updateDoc(doc(db, 'servers', server.id), { status: nextStatus });
             }
           }
-        } catch (error) {
-          console.error('Error fetching logs:', error);
         }
-      }, 2000);
-    }
-    return () => {
-      if (interval) clearInterval(interval);
+        if (logsResponse.ok) {
+          const data = await logsResponse.json();
+          if (data.reset) logOffsetRef.current = 0;
+          if (typeof data.text === 'string' && data.text) {
+            setLogs(prev => [...prev, ...data.text.split(/\r?\n/).filter(Boolean)]);
+          }
+          if (typeof data.offset === 'number') logOffsetRef.current = data.offset;
+        }
+      } catch (error) {
+        console.error('Workspace polling error:', error);
+      }
     };
+    poll();
+    const interval = setInterval(poll, 2000);
+    return () => { cancelled = true; clearInterval(interval); };
   }, [server.id, server.status]);
 
   useEffect(() => {
@@ -825,84 +841,93 @@ function Console({ server }: { server: ServerInstance }) {
     return () => unsubscribe();
   }, [server.id]);
 
-  const runCode = async () => {
+  const getFileFullPath = (file: ServerFile) => {
+    const parent = (file.path || '/').split('/').filter(Boolean).join('/');
+    return parent ? `${parent}/${file.name}` : file.name;
+  };
+
+  const workspaceRequest = async (url: string, init: RequestInit = {}) => {
+    const response = await fetch(url, {
+      ...init,
+      headers: { ...authHeaders(), ...(init.headers || {}) }
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || `Workspace request failed (${response.status})`);
+    }
+    return response;
+  };
+
+  const syncWorkspaceFiles = async () => {
+    const textFile = /\.(py|pyw|js|mjs|cjs|ts|tsx|jsx|json|jsonc|html|htm|css|scss|less|php|phtml|txt|md|markdown|yml|yaml|toml|ini|cfg|conf|env|sh|bash|sql|xml|csv|gitignore|dockerfile)$/i;
+    const ordered = [...files].sort((a, b) => {
+      if (a.type === b.type) return getFileFullPath(a).split('/').length - getFileFullPath(b).split('/').length;
+      return a.type === 'folder' ? -1 : 1;
+    });
+    for (const file of ordered) {
+      const rel = getFileFullPath(file);
+      if (file.type === 'folder') {
+        try {
+          await workspaceRequest('/api/ws/mkdir', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: rel }) });
+        } catch (error: any) {
+          if (!String(error.message).includes('already exists')) throw error;
+        }
+      } else {
+        // Never overwrite binary uploads with Firestore's empty text preview.
+        if (!textFile.test(file.name)) continue;
+        try {
+          await workspaceRequest('/api/ws/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: rel, content: file.content || '' }) });
+        } catch (error: any) {
+          if (!String(error.message).includes('already exists')) throw error;
+          await workspaceRequest('/api/ws/write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: rel, content: file.content || '' }) });
+        }
+      }
+    }
+  };
+
+  const resolveMainPath = () => {
+    const defaultMain = server.language === 'python' ? 'main.py' : server.language === 'javascript' ? 'index.js' : 'index.php';
+    const commonMains = server.language === 'python' ? ['main.py', 'app.py', 'bot.py', 'index.py']
+      : server.language === 'javascript' ? ['index.js', 'app.js', 'server.js', 'main.js'] : ['index.php', 'main.php', 'app.php'];
+    const configured = (server.mainFile || '').replace(/^\/+/, '');
+    if (configured) return configured;
+    const found = files.find(f => f.type === 'file' && commonMains.includes(f.name));
+    return found ? getFileFullPath(found) : defaultMain;
+  };
+
+  useEffect(() => {
+    mainPathRef.current = resolveMainPath();
+  }, [server.mainFile, server.language, files]);
+
+  const runCode = async (restart = false) => {
     if (isExecuting) return;
     setIsExecuting(true);
-    setLogs([`[ EVO ] جاري التحضير للتشغيل...`]);
-    
-    const defaultMain = server.language === 'python' ? 'main.py' : server.language === 'javascript' ? 'index.js' : 'index.php';
-    const commonMains = server.language === 'python' ? ['main.py', 'app.py', 'bot.py', 'index.py'] : 
-                        server.language === 'javascript' ? ['index.js', 'app.js', 'server.js', 'main.js'] : 
-                        ['index.php', 'main.php', 'app.php'];
-    
-    let mainFileName = server.mainFile;
-    
-    if (!mainFileName) {
-      // Try to find a common main file if it exists
-      const foundMain = files.find(f => commonMains.includes(f.name));
-      mainFileName = foundMain ? foundMain.name : defaultMain;
-    }
-
-    const getFileFullPath = (f: ServerFile) => {
-      const cleanPath = f.path === '/' ? '' : (f.path.startsWith('/') ? f.path.slice(1) : f.path);
-      return cleanPath ? `${cleanPath}/${f.name}` : f.name;
-    };
-
-    let mainFile = files.find(f => f.type === 'file' && (f.name === mainFileName || getFileFullPath(f) === mainFileName));
-    
-    if (!mainFile && !server.mainFile) {
-      // If no explicit main file, try common ones again with full path check
-      mainFile = files.find(f => f.type === 'file' && commonMains.includes(f.name));
-    }
-
-    if (!mainFile) {
-      setLogs(prev => [...prev, `[ ERROR ] لم يتم العثور على الملف الرئيسي: ${mainFileName}`]);
-      setLogs(prev => [...prev, `[ INFO ] الملفات المتاحة: ${files.filter(f => f.type === 'file').map(f => f.name).join(', ')}`]);
-      setIsExecuting(false);
-      return;
-    }
-
-    const actualMainPath = getFileFullPath(mainFile);
-
+    setLogs([ '[ EVO ] جاري تجهيز مساحة العمل...' ]);
+    logOffsetRef.current = 0;
     try {
-      const response = await fetch('/api/execute', {
+      await syncWorkspaceFiles();
+      const mainPath = resolveMainPath();
+      mainPathRef.current = mainPath;
+      const endpoint = restart ? '/api/ws/restart' : '/api/ws/run';
+      await workspaceRequest(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({
-          language: server.language,
-          files: files.filter(f => f.type === 'file').map(f => ({
-            name: getFileFullPath(f),
-            content: f.content
-          })),
-          main: actualMainPath,
-          serverId: server.id
-        })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: mainPath, keepAlive: true })
       });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        setLogs(prev => [...prev, `[ ERROR ] ${errorData.message || 'واجهة التشغيل القديمة متوقفة؛ يلزم ترحيل المشروع إلى محرك مساحة العمل.'}`]);
-        setIsExecuting(false);
-        return;
-      }
-
-      setLogs(prev => [...prev, `[ EVO ] تم إرسال طلب التشغيل بنجاح.`]);
-    } catch (error) {
-      console.error('Execution error:', error);
-      setLogs(prev => [...prev, `[ ERROR ] فشل الاتصال بمحرك التشغيل.`]);
+      await updateDoc(doc(db, 'servers', server.id), { status: 'starting' });
+      setLogs(prev => [...prev, `[ EVO ] تم إرسال أمر ${restart ? 'إعادة التشغيل' : 'التشغيل'} إلى محرك EVO: ${mainPath}`]);
+    } catch (error: any) {
+      console.error('Workspace execution error:', error);
+      setLogs(prev => [...prev, `[ ERROR ] ${error.message || 'فشل تشغيل المشروع.'}`]);
+      appAlert(error.message || 'فشل تشغيل المشروع.');
     } finally {
       setIsExecuting(false);
     }
   };
 
   useEffect(() => {
-    if (server.status === 'running' && !isExecuting) {
-      runCode();
-    } else if (server.status === 'stopped') {
-      setLogs(prev => [...prev, `[ EVO ] تم إيقاف السيرفر.`]);
-    } else if (server.status === 'starting') {
-      setLogs(prev => [...prev, `[ EVO ] جاري تهيئة السيرفر...`]);
-    }
+    if (server.status === 'stopped') setLogs(prev => [...prev, '[ EVO ] تم إيقاف السيرفر.']);
+    else if (server.status === 'starting') setLogs(prev => [...prev, '[ EVO ] جاري تهيئة السيرفر...']);
   }, [server.status]);
 
   useEffect(() => {
@@ -935,29 +960,31 @@ function Console({ server }: { server: ServerInstance }) {
   };
 
   const handleAction = async (action: 'running' | 'stopped' | 'starting') => {
+    if (action === 'running') {
+      await runCode(false);
+      return;
+    }
+    if (action === 'starting') {
+      await runCode(true);
+      return;
+    }
     if (consoleTimeoutRef.current) {
       clearTimeout(consoleTimeoutRef.current);
       consoleTimeoutRef.current = null;
     }
-
-    if (action === 'stopped') {
-      try {
-        await fetch('/api/stop', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...authHeaders() },
-          body: JSON.stringify({ serverId: server.id })
-        });
-      } catch (e) {
-        console.error('Failed to stop process:', e);
-      }
-    }
-
-    await updateDoc(doc(db, 'servers', server.id), { status: action });
-    if (action === 'starting') {
-      consoleTimeoutRef.current = setTimeout(async () => {
-        await updateDoc(doc(db, 'servers', server.id), { status: 'running' });
-        consoleTimeoutRef.current = null;
-      }, 2000);
+    try {
+      const rel = mainPathRef.current || resolveMainPath();
+      mainPathRef.current = rel;
+      await workspaceRequest('/api/ws/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: rel })
+      });
+      await updateDoc(doc(db, 'servers', server.id), { status: 'stopped' });
+      setLogs(prev => [...prev, '[ EVO ] تم إرسال أمر الإيقاف.']);
+    } catch (error: any) {
+      setLogs(prev => [...prev, `[ ERROR ] ${error.message || 'فشل إيقاف السيرفر.'}`]);
+      appAlert(error.message || 'فشل إيقاف السيرفر.');
     }
   };
 
@@ -975,7 +1002,7 @@ function Console({ server }: { server: ServerInstance }) {
     <div dir="ltr" className="space-y-4 sm:space-y-5">
       <div className="grid grid-cols-3 gap-3 sm:gap-4">
         <button
-          onClick={() => handleAction('starting')}
+          onClick={() => handleAction('running')}
           disabled={server.status === 'running' || server.status === 'starting' || isExecuting}
           className="py-4 rounded-xl bg-brand-500 hover:bg-brand-400 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-base sm:text-lg shadow-lg shadow-brand-600/20 transition-all active:scale-[0.98]"
         >
@@ -1120,28 +1147,50 @@ function FileManager({ server }: { server: ServerInstance }) {
     return () => unsubscribe();
   }, [server.id, currentPath]);
 
+  const workspacePath = (file: ServerFile) => {
+    const parent = (file.path || '/').split('/').filter(Boolean).join('/');
+    return parent ? `${parent}/${file.name}` : file.name;
+  };
+
+  const workspaceRequest = async (url: string, init: RequestInit = {}) => {
+    const response = await fetch(url, { ...init, headers: { ...authHeaders(), ...(init.headers || {}) } });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.message || `Workspace request failed (${response.status})`);
+    }
+    return response;
+  };
+
   const handleSave = async () => {
     if (!selectedFile) return;
-    await updateDoc(doc(db, 'servers', server.id, 'files', selectedFile.id), {
-      content: editContent,
-      updatedAt: serverTimestamp()
-    });
-    appAlert('تم حفظ الملف بنجاح!');
-    setView('list');
-    setSelectedFile(null);
+    try {
+      await workspaceRequest('/api/ws/write', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: workspacePath(selectedFile), content: editContent })
+      });
+      await updateDoc(doc(db, 'servers', server.id, 'files', selectedFile.id), {
+        content: editContent,
+        updatedAt: serverTimestamp()
+      });
+      appAlert('تم حفظ الملف بنجاح!');
+      setView('list');
+      setSelectedFile(null);
+    } catch (error: any) {
+      appAlert(error.message || 'تعذر حفظ الملف في مساحة العمل.');
+    }
   };
 
   const handleCreateFile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newFileName.trim()) return;
-    await addDoc(collection(db, 'servers', server.id, 'files'), {
-      serverId: server.id,
-      name: newFileName,
-      content: '',
-      path: currentPath,
-      type: 'file',
-      updatedAt: serverTimestamp()
-    });
+    try {
+      const rel = [...currentPath.split('/').filter(Boolean), newFileName.trim()].join('/');
+      await workspaceRequest('/api/ws/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: rel, content: '' }) });
+      await addDoc(collection(db, 'servers', server.id, 'files'), {
+        serverId: server.id, name: newFileName.trim(), content: '', path: currentPath, type: 'file', updatedAt: serverTimestamp()
+      });
+    } catch (error: any) { appAlert(error.message || 'تعذر إنشاء الملف.'); return; }
     setIsNewFileModal(false);
     setNewFileName('');
   };
@@ -1149,14 +1198,13 @@ function FileManager({ server }: { server: ServerInstance }) {
   const handleCreateFolder = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newFolderName.trim()) return;
-    await addDoc(collection(db, 'servers', server.id, 'files'), {
-      serverId: server.id,
-      name: newFolderName,
-      content: '',
-      path: currentPath,
-      type: 'folder',
-      updatedAt: serverTimestamp()
-    });
+    try {
+      const rel = [...currentPath.split('/').filter(Boolean), newFolderName.trim()].join('/');
+      await workspaceRequest('/api/ws/mkdir', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: rel }) });
+      await addDoc(collection(db, 'servers', server.id, 'files'), {
+        serverId: server.id, name: newFolderName.trim(), content: '', path: currentPath, type: 'folder', updatedAt: serverTimestamp()
+      });
+    } catch (error: any) { appAlert(error.message || 'تعذر إنشاء المجلد.'); return; }
     setIsNewFolderModal(false);
     setNewFolderName('');
   };
@@ -1164,10 +1212,26 @@ function FileManager({ server }: { server: ServerInstance }) {
   const handleRename = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!renameTarget || !newName.trim()) return;
-    await updateDoc(doc(db, 'servers', server.id, 'files', renameTarget.id), {
-      name: newName,
-      updatedAt: serverTimestamp()
-    });
+    try {
+      const from = workspacePath(renameTarget);
+      const parent = (renameTarget.path || '/').split('/').filter(Boolean);
+      const to = [...parent, newName.trim()].join('/');
+      await workspaceRequest('/api/ws/rename', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from, to }) });
+      if (renameTarget.type === 'folder') {
+        const oldPrefix = from;
+        const newPrefix = to;
+        const descendants = await getDocs(query(
+          collection(db, 'servers', server.id, 'files'),
+          where('path', '>=', '/' + oldPrefix),
+          where('path', '<=', '/' + oldPrefix + '\uf8ff')
+        ));
+        await Promise.all(descendants.docs.map(child => {
+          const childPath = String(child.data().path || '/');
+          return updateDoc(child.ref, { path: '/' + newPrefix + childPath.slice(('/' + oldPrefix).length), updatedAt: serverTimestamp() });
+        }));
+      }
+      await updateDoc(doc(db, 'servers', server.id, 'files', renameTarget.id), { name: newName.trim(), updatedAt: serverTimestamp() });
+    } catch (error: any) { appAlert(error.message || 'تعذرت إعادة تسمية العنصر.'); return; }
     setIsRenameModal(false);
     setRenameTarget(null);
     setNewName('');
@@ -1177,23 +1241,35 @@ function FileManager({ server }: { server: ServerInstance }) {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const content = event.target?.result as string;
-      await addDoc(collection(db, 'servers', server.id, 'files'), {
-        serverId: server.id,
-        name: file.name,
-        content: content,
-        path: currentPath,
-        type: 'file',
-        updatedAt: serverTimestamp()
-      });
-    };
-    reader.readAsText(file);
+    try {
+      const dir = currentPath.split('/').filter(Boolean).join('/');
+      const url = `/api/ws/upload?path=${encodeURIComponent(dir)}&name=${encodeURIComponent(file.name)}&overwrite=1`;
+      const response = await fetch(url, { method: 'PUT', headers: { ...authHeaders(), 'Content-Type': 'application/octet-stream' }, body: file });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.message || `Upload failed (${response.status})`);
+      }
+      const content = file.type.startsWith('text/') || /\.(py|js|ts|tsx|jsx|json|html|css|xml|md|txt|yml|yaml|php)$/i.test(file.name) ? await file.text() : '';
+      const q = query(collection(db, 'servers', server.id, 'files'), where('path', '==', currentPath), where('name', '==', file.name));
+      const existing = await getDocs(q);
+      if (existing.empty) {
+        await addDoc(collection(db, 'servers', server.id, 'files'), { serverId: server.id, name: file.name, content, path: currentPath, type: 'file', updatedAt: serverTimestamp() });
+      } else {
+        await updateDoc(existing.docs[0].ref, { content, type: 'file', updatedAt: serverTimestamp() });
+      }
+    } catch (error: any) {
+      appAlert(error.message || 'تعذر رفع الملف.');
+    } finally {
+      if (e.target) e.target.value = '';
+    }
   };
 
   const handleDeleteFile = async (fileId: string, fileType: 'file' | 'folder', fileName: string) => {
-    await deleteDoc(doc(db, 'servers', server.id, 'files', fileId));
+    try {
+      const target = files.find(f => f.id === fileId);
+      if (target) await workspaceRequest('/api/ws/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paths: [workspacePath(target)] }) });
+      await deleteDoc(doc(db, 'servers', server.id, 'files', fileId));
+    } catch (error: any) { appAlert(error.message || 'تعذر حذف العنصر.'); return; }
     
     // If it's a folder, delete all files inside it (simulated recursive delete)
     if (fileType === 'folder') {
@@ -1218,6 +1294,13 @@ function FileManager({ server }: { server: ServerInstance }) {
 
   const handleDeleteSelected = async () => {
     const itemsToDelete = files.filter(f => selectedIds.includes(f.id));
+    try {
+      const selectedFolders = itemsToDelete.filter(item => item.type === 'folder').map(workspacePath);
+      const pathsToDelete = itemsToDelete.map(workspacePath).filter(path =>
+        !selectedFolders.some(folder => path !== folder && path.startsWith(folder + '/'))
+      );
+      if (pathsToDelete.length) await workspaceRequest('/api/ws/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paths: pathsToDelete }) });
+    } catch (error: any) { appAlert(error.message || 'تعذر حذف العناصر.'); return; }
     for (const item of itemsToDelete) {
       await deleteDoc(doc(db, 'servers', server.id, 'files', item.id));
       if (item.type === 'folder') {
