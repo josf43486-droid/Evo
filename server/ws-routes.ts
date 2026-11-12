@@ -227,5 +227,5 @@ export function registerWorkspaceRoutes(app: any, raw: (opts: any) => any) {
   // ---------- صيانة ----------
   ws.purgeOldTrash().catch(() => {});
   setInterval(() => ws.purgeOldTrash().catch(() => {}), 6 * 3600 * 1000).unref();
-  run.restoreOnBoot();
+  migrationReady.then(() => run.restoreOnBoot()).catch(e => console.error('[runner] restore after workspace migration failed:', e));
 }
