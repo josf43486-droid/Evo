@@ -2,7 +2,7 @@ import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { authByUid, getDoc, onShutdown, isShuttingDown } from './store.ts';
+import { authByUid, getDoc, listDocs, onShutdown, isShuttingDown } from './store.ts';
 import { WsError, segments, joinRel, userDir, internalDir, RUNNABLE, extOf } from './workspace.ts';
 
 // تشغيل سكربتات المستخدمين (Python / Node / PHP) كعمليات مُدارة مع سجلات دائمة
@@ -33,6 +33,7 @@ interface Proc {
 
 const procs = new Map<string, Proc>();
 const keyOf = (uid: string, rel: string) => `${uid}|${rel}`;
+const ownerOf = (uid: string) => uid.split('::server::', 1)[0];
 const ACTIVE: Status[] = ['starting', 'installing', 'running', 'restarting'];
 const isActive = (p: Proc) => ACTIVE.includes(p.status);
 
@@ -380,7 +381,7 @@ function validateRunnable(uid: string, relIn: unknown): { rel: string; lang: 'py
 
 function countActive(uid: string) {
   let n = 0;
-  for (const p of procs.values()) if (p.uid === uid && p.kind === 'script' && isActive(p)) n++;
+  for (const p of procs.values()) if (ownerOf(p.uid) === ownerOf(uid) && p.kind === 'script' && isActive(p)) n++;
   return n;
 }
 
@@ -514,7 +515,7 @@ export function listAllActive() {
   const out: Array<ProcInfo & { uid: string; username: string }> = [];
   for (const p of procs.values()) {
     if (!isActive(p)) continue;
-    out.push({ ...info(p), uid: p.uid, username: (authByUid.get(p.uid)?.email || '').split('@')[0] });
+    out.push({ ...info(p), uid: p.uid, username: (authByUid.get(ownerOf(p.uid))?.email || '').split('@')[0] });
   }
   return out;
 }
@@ -523,13 +524,17 @@ export function listAllActive() {
 
 export function restoreOnBoot() {
   let delay = 0;
-  for (const uid of authByUid.keys()) {
-    const prof = getDoc('users', uid);
+  const scopes = new Set<string>(authByUid.keys());
+  for (const [serverId, server] of listDocs('servers')) {
+    if (typeof server.ownerId === 'string') scopes.add(`${server.ownerId}::server::${serverId}`);
+  }
+  for (const scope of scopes) {
+    const prof = getDoc('users', ownerOf(scope));
     if (prof?.isBanned) continue;
-    for (const [rel, f] of Object.entries(readFlags(uid))) {
+    for (const [rel, f] of Object.entries(readFlags(scope))) {
       if (!f.running || !f.keepAlive) continue;
       setTimeout(() => {
-        try { startScript(uid, rel, { keepAlive: true }); console.log(`[runner] restored ${rel}`); }
+        try { startScript(scope, rel, { keepAlive: true }); console.log(`[runner] restored ${rel}`); }
         catch (e: any) { console.log(`[runner] could not restore ${rel}: ${e.message}`); }
       }, (delay += 700)).unref();
     }
