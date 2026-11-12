@@ -20,7 +20,7 @@ const asPaths = (v: unknown): string[] => {
 
 /** يسجّل كل مسارات /api/ws على تطبيق express. raw = express.raw */
 export function registerWorkspaceRoutes(app: any, raw: (opts: any) => any) {
-  const migrationReady = ws.prepareServerWorkspaces().catch(e => { console.error('[workspace-migration] failed:', e); });
+  const migrationReady = ws.prepareServerWorkspaces();
 
   const guard = (fn: (req: any, res: any, u: AuthedUser) => Promise<void> | void) => async (req: any, res: any) => {
     const u = userFromHeader(req.headers.authorization);
