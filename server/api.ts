@@ -6,6 +6,7 @@ import {
   DATA_DIR, type Doc, type AuthRecord, authByEmail, authByUid, saveAuth,
   getDoc, putDoc, removeDoc, listDocs, genId,
 } from './store.ts';
+import { initializeServerWorkspace } from './workspace.ts';
 
 export interface ApiRequest {
   method: string;
@@ -454,6 +455,7 @@ export async function handleApi(req: ApiRequest): Promise<ApiResponse> {
         const r = checkWrite('set', full, undefined, data, false, ctx);
         if (!r.ok) return fail(403, 'permission-denied', r.msg);
         putDoc(segs.join('/'), id, r.data);
+        if (segs.join('/') === 'servers' && typeof r.data.ownerId === 'string') void initializeServerWorkspace(r.data.ownerId, id, false);
         if (segs.join('/') === 'rechargeRequests') {
           const d = r.data;
           void notifyOwner(`EVO | طلب دفع جديد\nالمستخدم: ${String(d.email || d.uid || 'غير معروف')}\nالمبلغ: ${Number(d.amount || 0)} ${String(d.currency || '')}\nالوسيلة: ${String(d.methodName || 'غير محددة')}\nالخطة: ${String(d.planName || 'شحن رصيد')}\nافتح لوحة المالك لمراجعة الإثبات.`);
@@ -472,6 +474,7 @@ export async function handleApi(req: ApiRequest): Promise<ApiResponse> {
         const r = checkWrite(op, segs, old, data, op === 'set' && body.merge === true, ctx);
         if (!r.ok) return fail(403, 'permission-denied', r.msg);
         putDoc(cp, id, r.data);
+        if (cp === 'servers' && !old && typeof r.data.ownerId === 'string') void initializeServerWorkspace(r.data.ownerId, id, false);
         if (cp === 'rechargeRequests' && old?.status === 'pending' && (r.data.status === 'approved' || r.data.status === 'rejected')) {
           const approved = r.data.status === 'approved';
           void notifyTelegramUser(r.data.telegram, approved
