@@ -1,2 +1,4 @@
 [phases.setup]
 nixPkgs = ["...", "python311", "python311Packages.pip"]
+
+# Python runtime for user-uploaded .py scripts.
