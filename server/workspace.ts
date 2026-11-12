@@ -53,25 +53,47 @@ export async function initializeServerWorkspace(uid: string, serverId: string, c
 
     if (copyLegacy && marker.legacyCopied !== true) {
       const legacy = userDir(uid);
+
+      // Merge only missing files recursively. Existing files in a server
+      // workspace win; the legacy source is never moved, renamed, or modified.
+      const copyMissing = async (from: string, to: string): Promise<void> => {
+        let source: fs.Stats;
+        try { source = await fsp.lstat(from); } catch (e: any) { if (e.code === 'ENOENT') return; throw e; }
+        if (source.isSymbolicLink()) return;
+
+        let destination: fs.Stats | null = null;
+        try { destination = await fsp.lstat(to); } catch (e: any) { if (e.code !== 'ENOENT') throw e; }
+
+        if (destination) {
+          if (source.isDirectory() && destination.isDirectory()) {
+            for (const child of await fsp.readdir(from)) {
+              await copyMissing(path.join(from, child), path.join(to, child));
+            }
+          }
+          return;
+        }
+
+        await fsp.mkdir(path.dirname(to), { recursive: true });
+        if (source.isDirectory()) {
+          await fsp.mkdir(to, { recursive: true });
+          for (const child of await fsp.readdir(from)) {
+            await copyMissing(path.join(from, child), path.join(to, child));
+          }
+        } else if (source.isFile()) {
+          try { await fsp.copyFile(from, to, fs.constants.COPYFILE_EXCL); }
+          catch (e: any) { if (e.code !== 'EEXIST') throw e; }
+        }
+      };
+
       let entries: fs.Dirent[] = [];
       try { entries = await fsp.readdir(legacy, { withFileTypes: true }); } catch {}
-
-      // Copy only missing paths. Existing server files are never overwritten,
-      // and the legacy source is read-only throughout this migration.
       for (const entry of entries) {
         if (entry.isSymbolicLink() || entry.name.toLowerCase() === INTERNAL.toLowerCase()) continue;
-        const from = path.join(legacy, entry.name);
-        const to = path.join(target, entry.name);
-        try { await fsp.cp(from, to, { recursive: true, force: false, errorOnExist: false }); }
-        catch (e: any) { if (e.code !== 'EEXIST') throw e; }
+        await copyMissing(path.join(legacy, entry.name), path.join(target, entry.name));
       }
 
       for (const name of ['site-packages', 'trash', 'logs']) {
-        const from = path.join(legacy, INTERNAL, name);
-        const to = path.join(target, INTERNAL, name);
-        if (!fs.existsSync(from)) continue;
-        try { await fsp.cp(from, to, { recursive: true, force: false, errorOnExist: false }); }
-        catch (e: any) { if (e.code !== 'EEXIST') throw e; }
+        await copyMissing(path.join(legacy, INTERNAL, name), path.join(target, INTERNAL, name));
       }
       marker.legacyCopied = true;
     }
