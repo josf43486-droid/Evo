@@ -39,24 +39,33 @@ export async function initializeServerWorkspace(uid: string, serverId: string, c
   const key = serverWorkspaceKey(uid, serverId);
   const target = userDir(key);
   const readyMarker = path.join(target, INTERNAL, 'workspace-ready');
-  if (fs.existsSync(readyMarker)) return;
+
+  // Serialize initialization before inspecting the marker. A workspace first
+  // created for a new server may later need the one-time legacy copy.
   const pending = workspaceMigrationLocks.get(key);
   if (pending) return pending;
+
   const task = (async () => {
     await fsp.mkdir(target, { recursive: true });
-    if (copyLegacy) {
-    const legacy = userDir(uid);
-    let entries: fs.Dirent[] = [];
-    try { entries = await fsp.readdir(legacy, { withFileTypes: true }); } catch {}
-    for (const entry of entries) {
-      if (entry.isSymbolicLink() || entry.name.toLowerCase() === INTERNAL.toLowerCase()) continue;
-      const from = path.join(legacy, entry.name);
-      const to = path.join(target, entry.name);
-      try { await fsp.cp(from, to, { recursive: true, force: false, errorOnExist: false }); }
-      catch (e: any) { if (e.code !== 'EEXIST') throw e; }
-    }
-      // Preserve installed Python packages and recoverable deleted files,
-      // but do not clone process flags or live logs between servers.
+
+    let marker: { legacyCopied?: boolean; [key: string]: unknown } = {};
+    try { marker = JSON.parse(await fsp.readFile(readyMarker, 'utf8')); } catch {}
+
+    if (copyLegacy && marker.legacyCopied !== true) {
+      const legacy = userDir(uid);
+      let entries: fs.Dirent[] = [];
+      try { entries = await fsp.readdir(legacy, { withFileTypes: true }); } catch {}
+
+      // Copy only missing paths. Existing server files are never overwritten,
+      // and the legacy source is read-only throughout this migration.
+      for (const entry of entries) {
+        if (entry.isSymbolicLink() || entry.name.toLowerCase() === INTERNAL.toLowerCase()) continue;
+        const from = path.join(legacy, entry.name);
+        const to = path.join(target, entry.name);
+        try { await fsp.cp(from, to, { recursive: true, force: false, errorOnExist: false }); }
+        catch (e: any) { if (e.code !== 'EEXIST') throw e; }
+      }
+
       for (const name of ['site-packages', 'trash', 'logs']) {
         const from = path.join(legacy, INTERNAL, name);
         const to = path.join(target, INTERNAL, name);
@@ -64,14 +73,18 @@ export async function initializeServerWorkspace(uid: string, serverId: string, c
         try { await fsp.cp(from, to, { recursive: true, force: false, errorOnExist: false }); }
         catch (e: any) { if (e.code !== 'EEXIST') throw e; }
       }
+      marker.legacyCopied = true;
     }
+
     await fsp.mkdir(path.dirname(readyMarker), { recursive: true });
-    await fsp.writeFile(readyMarker, JSON.stringify({ uid, serverId, initializedAt: Date.now() }), { flag: 'w' });
+    await fsp.writeFile(readyMarker, JSON.stringify({
+      ...marker, uid, serverId, initializedAt: marker.initializedAt || Date.now(),
+    }), { flag: 'w' });
   })();
+
   workspaceMigrationLocks.set(key, task);
   try { await task; } finally { workspaceMigrationLocks.delete(key); }
 }
-
 /** ترحيل الملفات الحالية مرة واحدة لكل سيرفر موجود قبل تفعيل العزل. */
 export async function prepareServerWorkspaces(): Promise<void> {
   for (const [serverId, server] of listDocs('servers')) {
