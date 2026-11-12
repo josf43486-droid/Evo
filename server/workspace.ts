@@ -57,7 +57,7 @@ export async function initializeServerWorkspace(uid: string, serverId: string, c
     }
       // Preserve installed Python packages and recoverable deleted files,
       // but do not clone process flags or live logs between servers.
-      for (const name of ['site-packages', 'trash']) {
+      for (const name of ['site-packages', 'trash', 'logs']) {
         const from = path.join(legacy, INTERNAL, name);
         const to = path.join(target, INTERNAL, name);
         if (!fs.existsSync(from)) continue;
