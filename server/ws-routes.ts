@@ -20,7 +20,7 @@ const asPaths = (v: unknown): string[] => {
 
 /** يسجّل كل مسارات /api/ws على تطبيق express. raw = express.raw */
 export function registerWorkspaceRoutes(app: any, raw: (opts: any) => any) {
-  ws.prepareServerWorkspaces().catch(e => console.error('[workspace-migration] failed:', e));
+  const migrationReady = ws.prepareServerWorkspaces().catch(e => { console.error('[workspace-migration] failed:', e); });
 
   const guard = (fn: (req: any, res: any, u: AuthedUser) => Promise<void> | void) => async (req: any, res: any) => {
     const u = userFromHeader(req.headers.authorization);
@@ -28,6 +28,7 @@ export function registerWorkspaceRoutes(app: any, raw: (opts: any) => any) {
     try {
       const serverId = asStr(req.query?.serverId) || asStr(req.body?.serverId);
       if (serverId) {
+        await migrationReady;
         if (!/^[A-Za-z0-9_-]{1,128}$/.test(serverId)) throw new WsError(400, 'Invalid server');
         const server = getDoc('servers', serverId);
         if (!server) throw new WsError(404, 'Server not found');
@@ -35,7 +36,7 @@ export function registerWorkspaceRoutes(app: any, raw: (opts: any) => any) {
         await ws.initializeServerWorkspace(server.ownerId || u.uid, serverId, false);
         req.workspaceUid = ws.serverWorkspaceKey(server.ownerId || u.uid, serverId);
       } else {
-        req.workspaceUid = req.workspaceUid;
+        req.workspaceUid = u.uid;
       }
       await fn(req, res, u);
     } catch (e: any) {
@@ -54,7 +55,7 @@ export function registerWorkspaceRoutes(app: any, raw: (opts: any) => any) {
     });
 
   // ---------- الحالة العامة (لوحة التحكم) ----------
-  app.get('/api/ws/status', guard(async (_req, res, u) => {
+  app.get('/api/ws/status', guard(async (req, res, u) => {
     const py = run.findPython();
     res.json({
       username: u.username,
