@@ -2,10 +2,10 @@ import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
-import { DATA_DIR, getDoc, authByUid } from './store.ts';
+import { DATA_DIR, getDoc, authByUid, listDocs } from './store.ts';
 import { readZipEntries, readEntryData, createZipWriter, ZipError } from './zip.ts';
 
-// مساحة ملفات حقيقية على القرص لكل مستخدم: data/users_data/<معرّف>/
+// مساحة ملفات حقيقية لكل مستخدم أو لكل سيرفر: data/users_data/<hash>/
 
 export class WsError extends Error {
   status: number;
@@ -30,6 +30,44 @@ const USERS_ROOT = path.join(DATA_DIR, 'users_data');
 export function userDir(uid: string): string {
   return path.join(USERS_ROOT, crypto.createHash('sha256').update(uid).digest('hex').slice(0, 24));
 }
+
+export const serverWorkspaceKey = (uid: string, serverId: string) => `${uid}::server::${serverId}`;
+
+const workspaceMigrationLocks = new Map<string, Promise<void>>();
+
+export async function initializeServerWorkspace(uid: string, serverId: string, copyLegacy = false): Promise<void> {
+  const key = serverWorkspaceKey(uid, serverId);
+  const target = userDir(key);
+  if (fs.existsSync(target)) return;
+  const pending = workspaceMigrationLocks.get(key);
+  if (pending) return pending;
+  const task = (async () => {
+    if (fs.existsSync(target)) return;
+    await fsp.mkdir(target, { recursive: true });
+    if (!copyLegacy) return;
+    const legacy = userDir(uid);
+    let entries: fs.Dirent[] = [];
+    try { entries = await fsp.readdir(legacy, { withFileTypes: true }); } catch {}
+    for (const entry of entries) {
+      if (entry.name.toLowerCase() === INTERNAL.toLowerCase()) continue;
+      const from = path.join(legacy, entry.name);
+      const to = path.join(target, entry.name);
+      try { await fsp.cp(from, to, { recursive: true, force: false, errorOnExist: false }); }
+      catch (e: any) { if (e.code !== 'EEXIST') throw e; }
+    }
+  })();
+  workspaceMigrationLocks.set(key, task);
+  try { await task; } finally { workspaceMigrationLocks.delete(key); }
+}
+
+/** ترحيل الملفات الحالية مرة واحدة لكل سيرفر موجود قبل تفعيل العزل. */
+export async function prepareServerWorkspaces(): Promise<void> {
+  for (const [serverId, server] of listDocs('servers')) {
+    if (typeof server.ownerId !== 'string') continue;
+    await initializeServerWorkspace(server.ownerId, serverId, true);
+  }
+}
+
 export const internalDir = (uid: string, ...parts: string[]) => path.join(userDir(uid), INTERNAL, ...parts);
 
 // ---------------- التحقق من الأسماء والمسارات ----------------
@@ -158,7 +196,10 @@ export async function usage(uid: string): Promise<number> {
   return bytes;
 }
 
-export const quotaFor = (uid: string): number => (getDoc('users', uid)?.role === 'admin' ? 0 : limits.quota);
+export const quotaFor = (uid: string): number => {
+  const ownerUid = uid.split('::server::', 1)[0];
+  return getDoc('users', ownerUid)?.role === 'admin' ? 0 : limits.quota;
+};
 
 async function ensureQuota(uid: string, extra: number) {
   const q = quotaFor(uid);
@@ -431,7 +472,11 @@ export async function purgeTrash(uid: string, id?: unknown) {
 
 export async function purgeOldTrash() {
   const cutoff = Date.now() - limits.trashDays * 24 * 3600 * 1000;
-  for (const uid of authByUid.keys()) {
+  const keys = new Set<string>(authByUid.keys());
+  for (const [serverId, server] of listDocs('servers')) {
+    if (typeof server.ownerId === 'string') keys.add(serverWorkspaceKey(server.ownerId, serverId));
+  }
+  for (const uid of keys) {
     try {
       for (const item of await listTrash(uid)) if (item.deletedAt < cutoff) await purgeTrash(uid, item.id);
     } catch {}
