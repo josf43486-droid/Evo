@@ -4,7 +4,7 @@ import * as ws from './workspace.ts';
 import * as run from './runner.ts';
 import * as shares from './share-links.ts';
 import { reportSecurityIncident } from './security.ts';
-import { DATA_DIR } from './store.ts';
+import { DATA_DIR, getDoc } from './store.ts';
 import path from 'node:path';
 import { analyzeProject } from './project-analyzer.ts';
 
@@ -24,6 +24,17 @@ export function registerWorkspaceRoutes(app: any, raw: (opts: any) => any) {
     const u = userFromHeader(req.headers.authorization);
     if (!u) return res.status(401).json({ message: 'Please log in again' });
     try {
+      const serverId = asStr(req.query?.serverId) || asStr(req.body?.serverId);
+      if (serverId) {
+        if (!/^[A-Za-z0-9_-]{1,128}$/.test(serverId)) throw new WsError(400, 'Invalid server');
+        const server = getDoc('servers', serverId);
+        if (!server) throw new WsError(404, 'Server not found');
+        if (!u.isAdmin && server.ownerId !== u.uid) throw new WsError(403, 'Access denied');
+        await ws.initializeServerWorkspace(server.ownerId || u.uid, serverId, false);
+        req.workspaceUid = ws.serverWorkspaceKey(server.ownerId || u.uid, serverId);
+      } else {
+        req.workspaceUid = u.uid;
+      }
       await fn(req, res, u);
     } catch (e: any) {
       if (res.headersSent) { res.destroy(); return; } // فشل أثناء البث (مثل النسخة الاحتياطية)
