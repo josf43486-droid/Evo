@@ -17,6 +17,8 @@ import { notifyOwner } from './server/notifications.ts';
 import { putDoc } from './server/store.ts';
 import { installSecurity, reportSecurityIncident } from './server/security.ts';
 import { registerCommunityRoutes } from './server/community.ts';
+import * as workspaceRunner from './server/runner.ts';
+import { serverWorkspaceKey } from './server/workspace.ts';
 
 // لا نسمح لخطأ غير متوقع بإيقاف الموقع بالكامل
 process.on('unhandledRejection', (e) => { console.error('[unhandledRejection]', e); void notifyOwner(`EVO | خطأ غير معالج\n${String(e).slice(0, 1000)}`); });
@@ -130,6 +132,8 @@ async function startServer() {
   app.get('/api/logs/:serverId', (req, res) => {
     const { serverId } = req.params;
     if (!guard(req, res, serverId)) return;
+    const auth = authorizeServer(req.headers.authorization, String(serverId || ''));
+    if (auth.ok) workspaceRunner.stopAll(serverWorkspaceKey(auth.uid, String(serverId)));
     const data = activeProcesses.get(serverId);
     if (!data) return res.status(404).json({ message: 'No active process found' });
     res.json({ logs: data.logs });
