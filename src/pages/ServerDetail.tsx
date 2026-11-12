@@ -1154,7 +1154,9 @@ function FileManager({ server }: { server: ServerInstance }) {
   };
 
   const workspaceRequest = async (url: string, init: RequestInit = {}) => {
-    const response = await fetch(url, { ...init, headers: { ...authHeaders(), ...(init.headers || {}) } });
+    // Every file-manager operation must target this server's isolated workspace.
+    const scopedUrl = `${url}${url.includes('?') ? '&' : '?'}serverId=${encodeURIComponent(server.id)}`;
+    const response = await fetch(scopedUrl, { ...init, headers: { ...authHeaders(), ...(init.headers || {}) } });
     if (!response.ok) {
       const data = await response.json().catch(() => ({}));
       throw new Error(data.message || `Workspace request failed (${response.status})`);
