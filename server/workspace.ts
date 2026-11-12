@@ -38,13 +38,14 @@ const workspaceMigrationLocks = new Map<string, Promise<void>>();
 export async function initializeServerWorkspace(uid: string, serverId: string, copyLegacy = false): Promise<void> {
   const key = serverWorkspaceKey(uid, serverId);
   const target = userDir(key);
-  if (fs.existsSync(target)) return;
+  const readyMarker = path.join(target, INTERNAL, 'workspace-ready');
+  if (fs.existsSync(readyMarker)) return;
   const pending = workspaceMigrationLocks.get(key);
   if (pending) return pending;
   const task = (async () => {
     if (fs.existsSync(target)) return;
     await fsp.mkdir(target, { recursive: true });
-    if (!copyLegacy) return;
+    if (copyLegacy) {
     const legacy = userDir(uid);
     let entries: fs.Dirent[] = [];
     try { entries = await fsp.readdir(legacy, { withFileTypes: true }); } catch {}
@@ -55,6 +56,9 @@ export async function initializeServerWorkspace(uid: string, serverId: string, c
       try { await fsp.cp(from, to, { recursive: true, force: false, errorOnExist: false }); }
       catch (e: any) { if (e.code !== 'EEXIST') throw e; }
     }
+    }
+    await fsp.mkdir(path.dirname(readyMarker), { recursive: true });
+    await fsp.writeFile(readyMarker, JSON.stringify({ uid, serverId, initializedAt: Date.now() }), { flag: 'w' });
   })();
   workspaceMigrationLocks.set(key, task);
   try { await task; } finally { workspaceMigrationLocks.delete(key); }
