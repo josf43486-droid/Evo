@@ -43,7 +43,6 @@ export async function initializeServerWorkspace(uid: string, serverId: string, c
   const pending = workspaceMigrationLocks.get(key);
   if (pending) return pending;
   const task = (async () => {
-    if (fs.existsSync(target)) return;
     await fsp.mkdir(target, { recursive: true });
     if (copyLegacy) {
     const legacy = userDir(uid);
