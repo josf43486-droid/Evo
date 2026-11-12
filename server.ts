@@ -14,7 +14,7 @@ import { registerWorkspaceRoutes } from './server/ws-routes.ts';
 import { ensureAdminAccount } from './server/admin.ts';
 import * as shareLinks from './server/share-links.ts';
 import { notifyOwner } from './server/notifications.ts';
-import { putDoc } from './server/store.ts';
+import { putDoc, getDoc } from './server/store.ts';
 import { installSecurity, reportSecurityIncident } from './server/security.ts';
 import { registerCommunityRoutes } from './server/community.ts';
 import * as workspaceRunner from './server/runner.ts';
@@ -147,7 +147,12 @@ async function startServer() {
     const { serverId } = req.body;
     if (!guard(req, res, serverId)) return;
     const auth = authorizeServer(req.headers.authorization, String(serverId || ''));
-    if (auth.ok) workspaceRunner.stopAll(serverWorkspaceKey(auth.uid, String(serverId)));
+    if (auth.ok) {
+      const server = getDoc('servers', String(serverId));
+      if (typeof server?.ownerId === 'string') {
+        workspaceRunner.stopAll(serverWorkspaceKey(server.ownerId, String(serverId)));
+      }
+    }
     const data = activeProcesses.get(serverId);
     if (data) {
       try {
