@@ -140,7 +140,7 @@ export function registerWorkspaceRoutes(app: any, raw: (opts: any) => any) {
     res.json(await ws.extractZip(req.workspaceUid, req.query.path, data, req.query.overwrite === '1'));
   }));
 
-  app.get('/api/ws/backup', guard(async (_req, res, u) => {
+  app.get('/api/ws/backup', guard(async (req, res, u) => {
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${u.username}-files-${new Date().toISOString().slice(0, 10)}.zip"`);
     await ws.writeBackup(req.workspaceUid, b => new Promise<void>(resolve => { if (res.write(b)) resolve(); else res.once('drain', () => resolve()); }));
@@ -148,7 +148,7 @@ export function registerWorkspaceRoutes(app: any, raw: (opts: any) => any) {
   }));
 
   // ---------- روابط المشاركة الآمنة ----------
-  app.get('/api/ws/shares', guard(async (_req, res, u) => {
+  app.get('/api/ws/shares', guard(async (req, res, u) => {
     res.json({ links: await shares.listShares(req.workspaceUid) });
   }));
   app.post('/api/ws/shares', guard(async (req, res, u) => {
@@ -160,7 +160,7 @@ export function registerWorkspaceRoutes(app: any, raw: (opts: any) => any) {
   }));
 
   // ---------- سلة المحذوفات ----------
-  app.get('/api/ws/trash', guard(async (_req, res, u) => {
+  app.get('/api/ws/trash', guard(async (req, res, u) => {
     res.json({ items: await ws.listTrash(req.workspaceUid) });
   }));
   app.post('/api/ws/trash/restore', guard(async (req, res, u) => {
@@ -170,7 +170,7 @@ export function registerWorkspaceRoutes(app: any, raw: (opts: any) => any) {
     await ws.purgeTrash(req.workspaceUid, req.body?.id);
     res.json({ ok: true });
   }));
-  app.post('/api/ws/trash/empty', guard(async (_req, res, u) => {
+  app.post('/api/ws/trash/empty', guard(async (req, res, u) => {
     await ws.purgeTrash(req.workspaceUid);
     res.json({ ok: true });
   }));
