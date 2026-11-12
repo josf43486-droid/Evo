@@ -509,6 +509,15 @@ export function listProcesses(uid: string): ProcInfo[] {
   return [...out.values()].sort((a, b) => order[a.status] - order[b.status] || a.path.localeCompare(b.path));
 }
 
+export function stopAll(uid: string) {
+  const rels = new Set<string>(Object.keys(readFlags(uid)));
+  for (const p of procs.values()) if (p.uid === uid) rels.add(p.rel);
+  for (const rel of rels) {
+    stopScript(uid, rel);
+    dropFlag(uid, rel);
+  }
+}
+
 export function activeCount(uid: string) { return countActive(uid); }
 
 export function listAllActive() {
