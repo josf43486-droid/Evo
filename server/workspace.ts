@@ -49,7 +49,7 @@ export async function initializeServerWorkspace(uid: string, serverId: string, c
     let entries: fs.Dirent[] = [];
     try { entries = await fsp.readdir(legacy, { withFileTypes: true }); } catch {}
     for (const entry of entries) {
-      if (entry.name.toLowerCase() === INTERNAL.toLowerCase()) continue;
+      if (entry.isSymbolicLink() || entry.name.toLowerCase() === INTERNAL.toLowerCase()) continue;
       const from = path.join(legacy, entry.name);
       const to = path.join(target, entry.name);
       try { await fsp.cp(from, to, { recursive: true, force: false, errorOnExist: false }); }
