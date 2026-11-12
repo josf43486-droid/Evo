@@ -55,6 +55,15 @@ export async function initializeServerWorkspace(uid: string, serverId: string, c
       try { await fsp.cp(from, to, { recursive: true, force: false, errorOnExist: false }); }
       catch (e: any) { if (e.code !== 'EEXIST') throw e; }
     }
+      // Preserve installed Python packages and recoverable deleted files,
+      // but do not clone process flags or live logs between servers.
+      for (const name of ['site-packages', 'trash']) {
+        const from = path.join(legacy, INTERNAL, name);
+        const to = path.join(target, INTERNAL, name);
+        if (!fs.existsSync(from)) continue;
+        try { await fsp.cp(from, to, { recursive: true, force: false, errorOnExist: false }); }
+        catch (e: any) { if (e.code !== 'EEXIST') throw e; }
+      }
     }
     await fsp.mkdir(path.dirname(readyMarker), { recursive: true });
     await fsp.writeFile(readyMarker, JSON.stringify({ uid, serverId, initializedAt: Date.now() }), { flag: 'w' });
