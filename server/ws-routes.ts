@@ -20,6 +20,8 @@ const asPaths = (v: unknown): string[] => {
 
 /** يسجّل كل مسارات /api/ws على تطبيق express. raw = express.raw */
 export function registerWorkspaceRoutes(app: any, raw: (opts: any) => any) {
+  ws.prepareServerWorkspaces().catch(e => console.error('[workspace-migration] failed:', e));
+
   const guard = (fn: (req: any, res: any, u: AuthedUser) => Promise<void> | void) => async (req: any, res: any) => {
     const u = userFromHeader(req.headers.authorization);
     if (!u) return res.status(401).json({ message: 'Please log in again' });
@@ -33,7 +35,7 @@ export function registerWorkspaceRoutes(app: any, raw: (opts: any) => any) {
         await ws.initializeServerWorkspace(server.ownerId || u.uid, serverId, false);
         req.workspaceUid = ws.serverWorkspaceKey(server.ownerId || u.uid, serverId);
       } else {
-        req.workspaceUid = u.uid;
+        req.workspaceUid = req.workspaceUid;
       }
       await fn(req, res, u);
     } catch (e: any) {
@@ -57,29 +59,29 @@ export function registerWorkspaceRoutes(app: any, raw: (opts: any) => any) {
     res.json({
       username: u.username,
       isAdmin: u.isAdmin,
-      usage: { used: await ws.usage(u.uid), quota: ws.quotaFor(u.uid) },
+      usage: { used: await ws.usage(req.workspaceUid), quota: ws.quotaFor(req.workspaceUid) },
       python: py ? py.label : null,
       limits: { maxUpload: limits.maxUpload, maxRunning: u.isAdmin ? 0 : run.limitsRun.perUser, trashDays: limits.trashDays },
-      processes: run.listProcesses(u.uid),
+      processes: run.listProcesses(req.workspaceUid),
     });
   }));
 
   // ---------- تحليل بنية المشروع واكتشاف ملفات التشغيل ----------
   app.post('/api/ws/analyze', guard(async (req, res, u) => {
-    res.json(await analyzeProject(u.uid, req.body?.path ?? ''));
+    res.json(await analyzeProject(req.workspaceUid, req.body?.path ?? ''));
   }));
 
   // ---------- الملفات ----------
   app.get('/api/ws/list', guard(async (req, res, u) => {
-    res.json({ entries: await ws.list(u.uid, req.query.path) });
+    res.json({ entries: await ws.list(req.workspaceUid, req.query.path) });
   }));
 
   app.get('/api/ws/read', guard(async (req, res, u) => {
-    res.json(await ws.readFile(u.uid, req.query.path));
+    res.json(await ws.readFile(req.workspaceUid, req.query.path));
   }));
 
   app.get('/api/ws/raw', guard(async (req, res, u) => {
-    const f = await ws.rawFile(u.uid, req.query.path);
+    const f = await ws.rawFile(req.workspaceUid, req.query.path);
     const inline = req.query.inline === '1' && ws.imageMime(f.name);
     res.setHeader('Content-Type', inline ? ws.imageMime(f.name)! : 'application/octet-stream');
     res.setHeader('Content-Length', String(f.size));
@@ -89,23 +91,23 @@ export function registerWorkspaceRoutes(app: any, raw: (opts: any) => any) {
   }));
 
   app.post('/api/ws/write', guard(async (req, res, u) => {
-    await ws.writeText(u.uid, req.body?.path, req.body?.content);
+    await ws.writeText(req.workspaceUid, req.body?.path, req.body?.content);
     res.json({ ok: true });
   }));
 
   app.post('/api/ws/create', guard(async (req, res, u) => {
-    await ws.createFile(u.uid, req.body?.path, asStr(req.body?.content) ?? '');
+    await ws.createFile(req.workspaceUid, req.body?.path, asStr(req.body?.content) ?? '');
     res.json({ ok: true });
   }));
 
   app.post('/api/ws/mkdir', guard(async (req, res, u) => {
-    await ws.makeDir(u.uid, req.body?.path);
+    await ws.makeDir(req.workspaceUid, req.body?.path);
     res.json({ ok: true });
   }));
 
   app.post('/api/ws/rename', guard(async (req, res, u) => {
-    run.stopPrefix(u.uid, ws.segments(req.body?.from));
-    await ws.rename(u.uid, req.body?.from, req.body?.to);
+    run.stopPrefix(req.workspaceUid, ws.segments(req.body?.from));
+    await ws.rename(req.workspaceUid, req.body?.from, req.body?.to);
     res.json({ ok: true });
   }));
 
@@ -113,8 +115,8 @@ export function registerWorkspaceRoutes(app: any, raw: (opts: any) => any) {
     let n = 0;
     for (const p of asPaths(req.body?.paths)) {
       const segs = ws.segments(p);
-      run.stopPrefix(u.uid, segs);
-      await ws.moveToTrash(u.uid, segs);
+      run.stopPrefix(req.workspaceUid, segs);
+      await ws.moveToTrash(req.workspaceUid, segs);
       n++;
     }
     res.json({ moved: n });
@@ -122,80 +124,80 @@ export function registerWorkspaceRoutes(app: any, raw: (opts: any) => any) {
 
   app.put('/api/ws/upload', raw({ type: () => true, limit: limits.maxUpload + 4096 }), guard(async (req, res, u) => {
     const data = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-    res.json(await ws.upload(u.uid, req.query.path, req.query.name, data, req.query.overwrite === '1'));
+    res.json(await ws.upload(req.workspaceUid, req.query.path, req.query.name, data, req.query.overwrite === '1'));
   }));
 
   app.post('/api/ws/extract', guard(async (req, res, u) => {
-    const file = await ws.rawFile(u.uid, req.body?.path);
+    const file = await ws.rawFile(req.workspaceUid, req.body?.path);
     const segs = ws.segments(req.body?.path);
     const zip = await fs.promises.readFile(file.full);
-    res.json(await ws.extractZip(u.uid, segs.slice(0, -1).join('/'), zip, req.body?.overwrite === true));
+    res.json(await ws.extractZip(req.workspaceUid, segs.slice(0, -1).join('/'), zip, req.body?.overwrite === true));
   }));
 
   app.put('/api/ws/extract-upload', raw({ type: () => true, limit: limits.maxUpload + 4096 }), guard(async (req, res, u) => {
     const data = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-    res.json(await ws.extractZip(u.uid, req.query.path, data, req.query.overwrite === '1'));
+    res.json(await ws.extractZip(req.workspaceUid, req.query.path, data, req.query.overwrite === '1'));
   }));
 
   app.get('/api/ws/backup', guard(async (_req, res, u) => {
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${u.username}-files-${new Date().toISOString().slice(0, 10)}.zip"`);
-    await ws.writeBackup(u.uid, b => new Promise<void>(resolve => { if (res.write(b)) resolve(); else res.once('drain', () => resolve()); }));
+    await ws.writeBackup(req.workspaceUid, b => new Promise<void>(resolve => { if (res.write(b)) resolve(); else res.once('drain', () => resolve()); }));
     res.end();
   }));
 
   // ---------- روابط المشاركة الآمنة ----------
   app.get('/api/ws/shares', guard(async (_req, res, u) => {
-    res.json({ links: await shares.listShares(u.uid) });
+    res.json({ links: await shares.listShares(req.workspaceUid) });
   }));
   app.post('/api/ws/shares', guard(async (req, res, u) => {
-    res.status(201).json(await shares.createShare(u.uid, req.body?.path, req.body?.expiresInHours));
+    res.status(201).json(await shares.createShare(req.workspaceUid, req.body?.path, req.body?.expiresInHours));
   }));
   app.delete('/api/ws/shares/:token', guard(async (req, res, u) => {
-    await shares.revokeShare(u.uid, req.params.token);
+    await shares.revokeShare(req.workspaceUid, req.params.token);
     res.json({ ok: true });
   }));
 
   // ---------- سلة المحذوفات ----------
   app.get('/api/ws/trash', guard(async (_req, res, u) => {
-    res.json({ items: await ws.listTrash(u.uid) });
+    res.json({ items: await ws.listTrash(req.workspaceUid) });
   }));
   app.post('/api/ws/trash/restore', guard(async (req, res, u) => {
-    res.json({ path: await ws.restoreTrash(u.uid, req.body?.id) });
+    res.json({ path: await ws.restoreTrash(req.workspaceUid, req.body?.id) });
   }));
   app.post('/api/ws/trash/purge', guard(async (req, res, u) => {
-    await ws.purgeTrash(u.uid, req.body?.id);
+    await ws.purgeTrash(req.workspaceUid, req.body?.id);
     res.json({ ok: true });
   }));
   app.post('/api/ws/trash/empty', guard(async (_req, res, u) => {
-    await ws.purgeTrash(u.uid);
+    await ws.purgeTrash(req.workspaceUid);
     res.json({ ok: true });
   }));
 
   // ---------- التشغيل ----------
   app.post('/api/ws/run', guard(async (req, res, u) => {
-    res.json(run.startScript(u.uid, req.body?.path, { keepAlive: typeof req.body?.keepAlive === 'boolean' ? req.body.keepAlive : undefined }));
+    res.json(run.startScript(req.workspaceUid, req.body?.path, { keepAlive: typeof req.body?.keepAlive === 'boolean' ? req.body.keepAlive : undefined }));
   }));
   app.post('/api/ws/stop', guard(async (req, res, u) => {
-    run.stopScript(u.uid, req.body?.path);
+    run.stopScript(req.workspaceUid, req.body?.path);
     res.json({ ok: true });
   }));
   app.post('/api/ws/restart', guard(async (req, res, u) => {
-    res.json(await run.restartScript(u.uid, req.body?.path));
+    res.json(await run.restartScript(req.workspaceUid, req.body?.path));
   }));
   app.post('/api/ws/keepalive', guard(async (req, res, u) => {
-    run.setKeepAlive(u.uid, req.body?.path, req.body?.value === true);
+    run.setKeepAlive(req.workspaceUid, req.body?.path, req.body?.value === true);
     res.json({ ok: true });
   }));
   app.post('/api/ws/install', guard(async (req, res, u) => {
-    res.json(run.installRequirements(u.uid, req.body?.path));
+    res.json(run.installRequirements(req.workspaceUid, req.body?.path));
   }));
   app.get('/api/ws/logs', guard(async (req, res, u) => {
     const from = req.query.from === undefined ? -1 : Number(req.query.from);
-    res.json(run.readLog(u.uid, req.query.path, from));
+    res.json(run.readLog(req.workspaceUid, req.query.path, from));
   }));
   app.post('/api/ws/logs/clear', guard(async (req, res, u) => {
-    run.clearLog(u.uid, req.body?.path);
+    run.clearLog(req.workspaceUid, req.body?.path);
     res.json({ ok: true });
   }));
 
