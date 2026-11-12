@@ -794,8 +794,8 @@ function Console({ server }: { server: ServerInstance }) {
       if (!rel) return;
       try {
         const [statusResponse, logsResponse] = await Promise.all([
-          fetch('/api/ws/status', { headers: authHeaders() }),
-          fetch(`/api/ws/logs?path=${encodeURIComponent(rel)}&from=${logOffsetRef.current}`, { headers: authHeaders() })
+          fetch(`/api/ws/status?serverId=${encodeURIComponent(server.id)}`, { headers: authHeaders() }),
+          fetch(`/api/ws/logs?path=${encodeURIComponent(rel)}&from=${logOffsetRef.current}&serverId=${encodeURIComponent(server.id)}`, { headers: authHeaders() })
         ]);
         if (cancelled) return;
         if (statusResponse.ok) {
@@ -847,7 +847,8 @@ function Console({ server }: { server: ServerInstance }) {
   };
 
   const workspaceRequest = async (url: string, init: RequestInit = {}) => {
-    const response = await fetch(url, {
+    const scopedUrl = `${url}${url.includes('?') ? '&' : '?'}serverId=${encodeURIComponent(server.id)}`;
+    const response = await fetch(scopedUrl, {
       ...init,
       headers: { ...authHeaders(), ...(init.headers || {}) }
     });
@@ -1243,7 +1244,7 @@ function FileManager({ server }: { server: ServerInstance }) {
 
     try {
       const dir = currentPath.split('/').filter(Boolean).join('/');
-      const url = `/api/ws/upload?path=${encodeURIComponent(dir)}&name=${encodeURIComponent(file.name)}&overwrite=1`;
+      const url = `/api/ws/upload?path=${encodeURIComponent(dir)}&name=${encodeURIComponent(file.name)}&overwrite=1&serverId=${encodeURIComponent(server.id)}`;
       const response = await fetch(url, { method: 'PUT', headers: { ...authHeaders(), 'Content-Type': 'application/octet-stream' }, body: file });
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));

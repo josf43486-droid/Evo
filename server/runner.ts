@@ -2,7 +2,7 @@ import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { authByUid, getDoc, onShutdown, isShuttingDown } from './store.ts';
+import { authByUid, getDoc, listDocs, onShutdown, isShuttingDown } from './store.ts';
 import { WsError, segments, joinRel, userDir, internalDir, RUNNABLE, extOf } from './workspace.ts';
 
 // تشغيل سكربتات المستخدمين (Python / Node / PHP) كعمليات مُدارة مع سجلات دائمة
@@ -33,6 +33,7 @@ interface Proc {
 
 const procs = new Map<string, Proc>();
 const keyOf = (uid: string, rel: string) => `${uid}|${rel}`;
+const ownerOf = (uid: string) => uid.split('::server::', 1)[0];
 const ACTIVE: Status[] = ['starting', 'installing', 'running', 'restarting'];
 const isActive = (p: Proc) => ACTIVE.includes(p.status);
 
@@ -380,7 +381,7 @@ function validateRunnable(uid: string, relIn: unknown): { rel: string; lang: 'py
 
 function countActive(uid: string) {
   let n = 0;
-  for (const p of procs.values()) if (p.uid === uid && p.kind === 'script' && isActive(p)) n++;
+  for (const p of procs.values()) if (ownerOf(p.uid) === ownerOf(uid) && p.kind === 'script' && isActive(p)) n++;
   return n;
 }
 
@@ -390,7 +391,7 @@ export function startScript(uid: string, relIn: unknown, opts: { keepAlive?: boo
   const existing = procs.get(key);
   if (existing && isActive(existing)) throw new WsError(409, 'This script is already running');
 
-  const isAdmin = getDoc('users', uid)?.role === 'admin';
+  const isAdmin = getDoc('users', ownerOf(uid))?.role === 'admin';
   if (!isAdmin && limitsRun.perUser > 0 && countActive(uid) >= limitsRun.perUser) {
     throw new WsError(429, `You can run up to ${limitsRun.perUser} scripts at the same time. Stop one first.`);
   }
@@ -508,13 +509,22 @@ export function listProcesses(uid: string): ProcInfo[] {
   return [...out.values()].sort((a, b) => order[a.status] - order[b.status] || a.path.localeCompare(b.path));
 }
 
+export function stopAll(uid: string) {
+  const rels = new Set<string>(Object.keys(readFlags(uid)));
+  for (const p of procs.values()) if (p.uid === uid) rels.add(p.rel);
+  for (const rel of rels) {
+    stopScript(uid, rel);
+    dropFlag(uid, rel);
+  }
+}
+
 export function activeCount(uid: string) { return countActive(uid); }
 
 export function listAllActive() {
   const out: Array<ProcInfo & { uid: string; username: string }> = [];
   for (const p of procs.values()) {
     if (!isActive(p)) continue;
-    out.push({ ...info(p), uid: p.uid, username: (authByUid.get(p.uid)?.email || '').split('@')[0] });
+    out.push({ ...info(p), uid: p.uid, username: (authByUid.get(ownerOf(p.uid))?.email || '').split('@')[0] });
   }
   return out;
 }
@@ -523,13 +533,25 @@ export function listAllActive() {
 
 export function restoreOnBoot() {
   let delay = 0;
+  const scopes = new Set<string>();
+  const ownersWithServers = new Set<string>();
+  for (const [serverId, server] of listDocs('servers')) {
+    if (typeof server.ownerId !== 'string') continue;
+    ownersWithServers.add(server.ownerId);
+    scopes.add(`${server.ownerId}::server::${serverId}`);
+  }
+  // Keep legacy account workspaces available for accounts without servers,
+  // but never restart old shared-workspace bots alongside their per-server copies.
   for (const uid of authByUid.keys()) {
-    const prof = getDoc('users', uid);
+    if (!ownersWithServers.has(uid)) scopes.add(uid);
+  }
+  for (const scope of scopes) {
+    const prof = getDoc('users', ownerOf(scope));
     if (prof?.isBanned) continue;
-    for (const [rel, f] of Object.entries(readFlags(uid))) {
+    for (const [rel, f] of Object.entries(readFlags(scope))) {
       if (!f.running || !f.keepAlive) continue;
       setTimeout(() => {
-        try { startScript(uid, rel, { keepAlive: true }); console.log(`[runner] restored ${rel}`); }
+        try { startScript(scope, rel, { keepAlive: true }); console.log(`[runner] restored ${rel}`); }
         catch (e: any) { console.log(`[runner] could not restore ${rel}: ${e.message}`); }
       }, (delay += 700)).unref();
     }

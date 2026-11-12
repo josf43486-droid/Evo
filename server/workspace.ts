@@ -2,10 +2,10 @@ import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
-import { DATA_DIR, getDoc, authByUid } from './store.ts';
+import { DATA_DIR, getDoc, authByUid, listDocs } from './store.ts';
 import { readZipEntries, readEntryData, createZipWriter, ZipError } from './zip.ts';
 
-// مساحة ملفات حقيقية على القرص لكل مستخدم: data/users_data/<معرّف>/
+// مساحة ملفات حقيقية لكل مستخدم أو لكل سيرفر: data/users_data/<hash>/
 
 export class WsError extends Error {
   status: number;
@@ -30,6 +30,91 @@ const USERS_ROOT = path.join(DATA_DIR, 'users_data');
 export function userDir(uid: string): string {
   return path.join(USERS_ROOT, crypto.createHash('sha256').update(uid).digest('hex').slice(0, 24));
 }
+
+export const serverWorkspaceKey = (uid: string, serverId: string) => `${uid}::server::${serverId}`;
+
+const workspaceMigrationLocks = new Map<string, Promise<void>>();
+
+export async function initializeServerWorkspace(uid: string, serverId: string, copyLegacy = false): Promise<void> {
+  const key = serverWorkspaceKey(uid, serverId);
+  const target = userDir(key);
+  const readyMarker = path.join(target, INTERNAL, 'workspace-ready');
+
+  // Serialize initialization before inspecting the marker. A workspace first
+  // created for a new server may later need the one-time legacy copy.
+  const pending = workspaceMigrationLocks.get(key);
+  if (pending) return pending;
+
+  const task = (async () => {
+    await fsp.mkdir(target, { recursive: true });
+
+    let marker: { legacyCopied?: boolean; [key: string]: unknown } = {};
+    try { marker = JSON.parse(await fsp.readFile(readyMarker, 'utf8')); } catch {}
+
+    if (copyLegacy && marker.legacyCopied !== true) {
+      const legacy = userDir(uid);
+
+      // Merge only missing files recursively. Existing files in a server
+      // workspace win; the legacy source is never moved, renamed, or modified.
+      const copyMissing = async (from: string, to: string): Promise<void> => {
+        let source: fs.Stats;
+        try { source = await fsp.lstat(from); } catch (e: any) { if (e.code === 'ENOENT') return; throw e; }
+        if (source.isSymbolicLink()) return;
+
+        let destination: fs.Stats | null = null;
+        try { destination = await fsp.lstat(to); } catch (e: any) { if (e.code !== 'ENOENT') throw e; }
+
+        if (destination) {
+          if (source.isDirectory() && destination.isDirectory()) {
+            for (const child of await fsp.readdir(from)) {
+              await copyMissing(path.join(from, child), path.join(to, child));
+            }
+          }
+          return;
+        }
+
+        await fsp.mkdir(path.dirname(to), { recursive: true });
+        if (source.isDirectory()) {
+          await fsp.mkdir(to, { recursive: true });
+          for (const child of await fsp.readdir(from)) {
+            await copyMissing(path.join(from, child), path.join(to, child));
+          }
+        } else if (source.isFile()) {
+          try { await fsp.copyFile(from, to, fs.constants.COPYFILE_EXCL); }
+          catch (e: any) { if (e.code !== 'EEXIST') throw e; }
+        }
+      };
+
+      let entries: fs.Dirent[] = [];
+      try { entries = await fsp.readdir(legacy, { withFileTypes: true }); } catch {}
+      for (const entry of entries) {
+        if (entry.isSymbolicLink() || entry.name.toLowerCase() === INTERNAL.toLowerCase()) continue;
+        await copyMissing(path.join(legacy, entry.name), path.join(target, entry.name));
+      }
+
+      for (const name of ['site-packages', 'trash', 'logs']) {
+        await copyMissing(path.join(legacy, INTERNAL, name), path.join(target, INTERNAL, name));
+      }
+      marker.legacyCopied = true;
+    }
+
+    await fsp.mkdir(path.dirname(readyMarker), { recursive: true });
+    await fsp.writeFile(readyMarker, JSON.stringify({
+      ...marker, uid, serverId, initializedAt: marker.initializedAt || Date.now(),
+    }), { flag: 'w' });
+  })();
+
+  workspaceMigrationLocks.set(key, task);
+  try { await task; } finally { workspaceMigrationLocks.delete(key); }
+}
+/** ترحيل الملفات الحالية مرة واحدة لكل سيرفر موجود قبل تفعيل العزل. */
+export async function prepareServerWorkspaces(): Promise<void> {
+  for (const [serverId, server] of listDocs('servers')) {
+    if (typeof server.ownerId !== 'string') continue;
+    await initializeServerWorkspace(server.ownerId, serverId, true);
+  }
+}
+
 export const internalDir = (uid: string, ...parts: string[]) => path.join(userDir(uid), INTERNAL, ...parts);
 
 // ---------------- التحقق من الأسماء والمسارات ----------------
@@ -158,7 +243,10 @@ export async function usage(uid: string): Promise<number> {
   return bytes;
 }
 
-export const quotaFor = (uid: string): number => (getDoc('users', uid)?.role === 'admin' ? 0 : limits.quota);
+export const quotaFor = (uid: string): number => {
+  const ownerUid = uid.split('::server::', 1)[0];
+  return getDoc('users', ownerUid)?.role === 'admin' ? 0 : limits.quota;
+};
 
 async function ensureQuota(uid: string, extra: number) {
   const q = quotaFor(uid);
@@ -431,7 +519,11 @@ export async function purgeTrash(uid: string, id?: unknown) {
 
 export async function purgeOldTrash() {
   const cutoff = Date.now() - limits.trashDays * 24 * 3600 * 1000;
-  for (const uid of authByUid.keys()) {
+  const keys = new Set<string>(authByUid.keys());
+  for (const [serverId, server] of listDocs('servers')) {
+    if (typeof server.ownerId === 'string') keys.add(serverWorkspaceKey(server.ownerId, serverId));
+  }
+  for (const uid of keys) {
     try {
       for (const item of await listTrash(uid)) if (item.deletedAt < cutoff) await purgeTrash(uid, item.id);
     } catch {}

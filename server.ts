@@ -14,9 +14,11 @@ import { registerWorkspaceRoutes } from './server/ws-routes.ts';
 import { ensureAdminAccount } from './server/admin.ts';
 import * as shareLinks from './server/share-links.ts';
 import { notifyOwner } from './server/notifications.ts';
-import { putDoc } from './server/store.ts';
+import { putDoc, getDoc } from './server/store.ts';
 import { installSecurity, reportSecurityIncident } from './server/security.ts';
 import { registerCommunityRoutes } from './server/community.ts';
+import * as workspaceRunner from './server/runner.ts';
+import { serverWorkspaceKey } from './server/workspace.ts';
 
 // لا نسمح لخطأ غير متوقع بإيقاف الموقع بالكامل
 process.on('unhandledRejection', (e) => { console.error('[unhandledRejection]', e); void notifyOwner(`EVO | خطأ غير معالج\n${String(e).slice(0, 1000)}`); });
@@ -144,6 +146,13 @@ async function startServer() {
   app.post('/api/stop', (req, res) => {
     const { serverId } = req.body;
     if (!guard(req, res, serverId)) return;
+    const auth = authorizeServer(req.headers.authorization, String(serverId || ''));
+    if (auth.ok) {
+      const server = getDoc('servers', String(serverId));
+      if (typeof server?.ownerId === 'string') {
+        workspaceRunner.stopAll(serverWorkspaceKey(server.ownerId, String(serverId)));
+      }
+    }
     const data = activeProcesses.get(serverId);
     if (data) {
       try {
