@@ -391,7 +391,7 @@ export function startScript(uid: string, relIn: unknown, opts: { keepAlive?: boo
   const existing = procs.get(key);
   if (existing && isActive(existing)) throw new WsError(409, 'This script is already running');
 
-  const isAdmin = getDoc('users', uid)?.role === 'admin';
+  const isAdmin = getDoc('users', ownerOf(uid))?.role === 'admin';
   if (!isAdmin && limitsRun.perUser > 0 && countActive(uid) >= limitsRun.perUser) {
     throw new WsError(429, `You can run up to ${limitsRun.perUser} scripts at the same time. Stop one first.`);
   }
@@ -533,9 +533,17 @@ export function listAllActive() {
 
 export function restoreOnBoot() {
   let delay = 0;
-  const scopes = new Set<string>(authByUid.keys());
+  const scopes = new Set<string>();
+  const ownersWithServers = new Set<string>();
   for (const [serverId, server] of listDocs('servers')) {
-    if (typeof server.ownerId === 'string') scopes.add(`${server.ownerId}::server::${serverId}`);
+    if (typeof server.ownerId !== 'string') continue;
+    ownersWithServers.add(server.ownerId);
+    scopes.add(`${server.ownerId}::server::${serverId}`);
+  }
+  // Keep legacy account workspaces available for accounts without servers,
+  // but never restart old shared-workspace bots alongside their per-server copies.
+  for (const uid of authByUid.keys()) {
+    if (!ownersWithServers.has(uid)) scopes.add(uid);
   }
   for (const scope of scopes) {
     const prof = getDoc('users', ownerOf(scope));
