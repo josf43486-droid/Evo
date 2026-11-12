@@ -132,8 +132,6 @@ async function startServer() {
   app.get('/api/logs/:serverId', (req, res) => {
     const { serverId } = req.params;
     if (!guard(req, res, serverId)) return;
-    const auth = authorizeServer(req.headers.authorization, String(serverId || ''));
-    if (auth.ok) workspaceRunner.stopAll(serverWorkspaceKey(auth.uid, String(serverId)));
     const data = activeProcesses.get(serverId);
     if (!data) return res.status(404).json({ message: 'No active process found' });
     res.json({ logs: data.logs });
@@ -148,6 +146,8 @@ async function startServer() {
   app.post('/api/stop', (req, res) => {
     const { serverId } = req.body;
     if (!guard(req, res, serverId)) return;
+    const auth = authorizeServer(req.headers.authorization, String(serverId || ''));
+    if (auth.ok) workspaceRunner.stopAll(serverWorkspaceKey(auth.uid, String(serverId)));
     const data = activeProcesses.get(serverId);
     if (data) {
       try {
