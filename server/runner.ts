@@ -64,7 +64,7 @@ export function findPython(): Interp | null {
       const splitAt = out.lastIndexOf('|');
       const executable = splitAt > 0 ? out.slice(0, splitAt) : '';
       const version = splitAt > 0 ? out.slice(splitAt + 1) : '';
-      if (r.status === 0 && path.isAbsolute(executable) && /^\\d+\\.\\d+/.test(version)) {
+      if (r.status === 0 && path.isAbsolute(executable) && /^\d+\.\d+/.test(version)) {
         pythonCache = { cmd: executable, args: [], label: version };
         return pythonCache;
       }
