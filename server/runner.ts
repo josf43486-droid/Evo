@@ -57,10 +57,15 @@ export function findPython(): Interp | null {
     : [['python3', []], ['python', []]];
   for (const [cmd, pre] of candidates) {
     try {
-      const r = spawnSync(cmd, [...pre, '-c', 'import sys; print(sys.version.split()[0])'], { encoding: 'utf8', timeout: 8000, windowsHide: true });
+      // Resolve Python to an absolute path so pip --python does not have
+      // to search for a bare "python3" command in Railway's child environment.
+      const r = spawnSync(cmd, [...pre, '-c', 'import sys; print(sys.executable + "|" + sys.version.split()[0])'], { encoding: 'utf8', timeout: 8000, windowsHide: true });
       const out = (r.stdout || '').trim();
-      if (r.status === 0 && /^\d+\.\d+/.test(out)) {
-        pythonCache = { cmd, args: pre, label: out };
+      const splitAt = out.lastIndexOf('|');
+      const executable = splitAt > 0 ? out.slice(0, splitAt) : '';
+      const version = splitAt > 0 ? out.slice(splitAt + 1) : '';
+      if (r.status === 0 && path.isAbsolute(executable) && /^\\d+\\.\\d+/.test(version)) {
+        pythonCache = { cmd: executable, args: [], label: version };
         return pythonCache;
       }
     } catch {}
