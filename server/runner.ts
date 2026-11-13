@@ -234,7 +234,22 @@ function runPip(p: Proc, py: Interp, reqFile: string): Promise<number> {
   return new Promise(resolve => {
     const site = internalDir(p.uid, 'site-packages');
     fs.mkdirSync(site, { recursive: true });
-    const child = spawn(py.cmd, [...py.args, '-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--upgrade', '--target', site, '-r', reqFile], {
+
+    // Nixpacks exposes pip as a standalone executable; its Python module may
+    // not be importable through the selected python interpreter. Use pip's
+    // --python mode so packages are installed for the exact runtime interpreter.
+    let pipCmd: string | null = null;
+    for (const candidate of (IS_WIN ? ['pip.exe', 'pip3.exe', 'pip', 'pip3'] : ['pip3', 'pip'])) {
+      try {
+        const check = spawnSync(candidate, ['--version'], { encoding: 'utf8', timeout: 8000, windowsHide: true });
+        if (check.status === 0) { pipCmd = candidate; break; }
+      } catch {}
+    }
+
+    const installArgs = pipCmd
+      ? ['--python', py.cmd, 'install', '--disable-pip-version-check', '--no-input', '--upgrade', '--target', site, '-r', reqFile]
+      : [...py.args, '-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--upgrade', '--target', site, '-r', reqFile];
+    const child = spawn(pipCmd || py.cmd, pipCmd ? installArgs : installArgs, {
       cwd: path.dirname(reqFile), env: buildEnv(p.uid), stdio: ['ignore', 'pipe', 'pipe'], detached: !IS_WIN, windowsHide: true,
     });
     p.child = child;
