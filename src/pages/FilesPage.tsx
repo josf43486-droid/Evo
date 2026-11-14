@@ -292,7 +292,7 @@ export default function FilesPage() {
                   <button onClick={() => guarded(async () => {
                     const r = await api.extract(joinPath(cwd, selectedEntries[0].name));
                     notify(`Extracted ${r.files} file${r.files === 1 ? '' : 's'}${r.skipped.length ? `, ${r.skipped.length} skipped` : ''}`);
-                  })} className={btn.small}>Extract here</button>
+                  })} className={btn.small}>Unarchive</button>
                 )}
                 <button onClick={() => setDialog('delete')} className={btn.smallDanger}>Delete</button>
                 <button onClick={() => setSelected(new Set())} className="ml-auto text-xs text-gray-400 hover:text-white">Clear</button>
