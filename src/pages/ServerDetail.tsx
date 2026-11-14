@@ -888,7 +888,7 @@ function Console({ server }: { server: ServerInstance }) {
 
   const resolveMainPath = () => {
     const defaultMain = server.language === 'python' ? 'main.py' : server.language === 'javascript' ? 'index.js' : 'index.php';
-    const commonMains = server.language === 'python' ? ['main.py', 'app.py', 'bot.py', 'index.py']
+    const commonMains = server.language === 'python' ? ['main.py', 'app.py', 'bot.py', 'app.py']
       : server.language === 'javascript' ? ['index.js', 'app.js', 'server.js', 'main.js'] : ['index.php', 'main.php', 'app.php'];
     const configured = (server.mainFile || '').replace(/^\/+/, '');
     if (configured) return configured;
@@ -1813,7 +1813,7 @@ function FileManager({ server }: { server: ServerInstance }) {
 function ServerSettings({ server }: { server: ServerInstance }) {
   const navigate = useNavigate();
   const [name, setName] = useState(server.name);
-  const [mainFile, setMainFile] = useState(server.mainFile || 'index.py');
+  const [mainFile, setMainFile] = useState(server.mainFile || 'app.py');
   const [version, setVersion] = useState(server.version || '');
   const [isDeleting, setIsDeleting] = useState(false);
   const [isDeleteModal, setIsDeleteModal] = useState(false);
@@ -1826,7 +1826,7 @@ function ServerSettings({ server }: { server: ServerInstance }) {
 
   useEffect(() => {
     setName(server.name);
-    setMainFile(server.mainFile || 'index.py');
+    setMainFile(server.mainFile || 'app.py');
     setVersion(server.version || (versions[server.language as keyof typeof versions]?.[0] || ''));
   }, [server.id]);
 
@@ -1913,7 +1913,7 @@ function ServerSettings({ server }: { server: ServerInstance }) {
               value={mainFile}
               onChange={(e) => setMainFile(e.target.value)}
               className="w-full px-4 py-2.5 sm:py-3 bg-white/5 border border-white/10 rounded-xl text-white outline-none focus:ring-2 focus:ring-brand-500 text-right font-mono text-sm sm:text-base"
-              placeholder="index.py"
+              placeholder="app.py"
             />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
