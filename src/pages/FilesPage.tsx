@@ -45,6 +45,7 @@ export default function FilesPage() {
   const [dragging, setDragging] = useState(false);
   const [analysis, setAnalysis] = useState<ProjectAnalysis | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const [unarchiving, setUnarchiving] = useState(false);
 
   const fileInput = useRef<HTMLInputElement>(null);
   const zipInput = useRef<HTMLInputElement>(null);
@@ -288,11 +289,30 @@ export default function FilesPage() {
               <div className="flex flex-wrap items-center gap-2 mb-3 px-3 py-2 bg-brand-900/20 border border-brand-700/40 rounded-lg text-sm">
                 <span className="text-gray-300 mr-2">{selected.size} selected</span>
                 {selected.size === 1 && <button onClick={() => setDialog('rename')} className={btn.small}>Rename</button>}
-                {selected.size === 1 && selectedEntries[0]?.type === 'file' && extOf(selectedEntries[0].name) === 'zip' && (
-                  <button onClick={() => guarded(async () => {
-                    const r = await api.extract(joinPath(cwd, selectedEntries[0].name));
-                    notify(`Extracted ${r.files} file${r.files === 1 ? '' : 's'}${r.skipped.length ? `, ${r.skipped.length} skipped` : ''}`);
-                  })} className={btn.small}>Unarchive</button>
+                {selected.size === 1 && selectedEntries[0]?.type === 'file' && selectedEntries[0].name.toLowerCase().endsWith('.zip') && (
+                  <button
+                    disabled={unarchiving}
+                    onClick={async () => {
+                      const archivePath = joinPath(cwd, selectedEntries[0].name);
+                      setUnarchiving(true);
+                      setProgress({ label: `Unarchiving ${selectedEntries[0].name}`, fraction: 1 });
+                      try {
+                        const result = await api.extract(archivePath);
+                        notify(`Unarchived ${result.files} file${result.files === 1 ? '' : 's'}${result.skipped.length ? `, ${result.skipped.length} skipped` : ''}`);
+                        setSelected(new Set());
+                        refreshAll();
+                      } catch (e: any) {
+                        notify(e.message || 'Could not unarchive this file', true);
+                      } finally {
+                        setProgress(null);
+                        setUnarchiving(false);
+                      }
+                    }}
+                    className={btn.small}
+                    title="Extract this ZIP into the current folder"
+                  >
+                    {unarchiving ? 'Unarchiving…' : 'Un Archive'}
+                  </button>
                 )}
                 <button onClick={() => setDialog('delete')} className={btn.smallDanger}>Delete</button>
                 <button onClick={() => setSelected(new Set())} className="ml-auto text-xs text-gray-400 hover:text-white">Clear</button>
