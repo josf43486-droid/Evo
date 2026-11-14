@@ -84,7 +84,7 @@ function interpreterFor(lang: 'python' | 'node' | 'php'): Interp | null {
 const ENV_ALLOW = new Set([
   'path', 'systemroot', 'windir', 'temp', 'tmp', 'tmpdir', 'home', 'userprofile', 'lang', 'lc_all', 'comspec', 'pathext',
   'appdata', 'localappdata', 'programdata', 'programfiles', 'programfiles(x86)', 'number_of_processors',
-  'processor_architecture', 'ssl_cert_file', 'tz', 'username', 'computername',
+  'processor_architecture', 'ssl_cert_file', 'tz', 'username', 'computername', 'CHROME_BIN', 'CHROMEDRIVER_PATH',
 ]);
 
 function buildEnv(uid: string): NodeJS.ProcessEnv {
